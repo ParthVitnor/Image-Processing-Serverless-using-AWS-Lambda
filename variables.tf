@@ -67,3 +67,9 @@ variable "thumbnail_height" {
   type        = number
   default     = 200
 }
+
+variable "force_destroy_buckets" {
+  description = "Allow Terraform to destroy S3 buckets even when they contain objects. Set to true only in non-production environments."
+  type        = bool
+  default     = false
+}

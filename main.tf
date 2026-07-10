@@ -5,7 +5,7 @@
 # Source bucket — original images are uploaded here
 resource "aws_s3_bucket" "source" {
   bucket        = var.source_bucket_name
-  force_destroy = true
+  force_destroy = var.force_destroy_buckets
 
   tags = {
     Name        = "Image Processing Source Bucket"
@@ -43,7 +43,7 @@ resource "aws_s3_bucket_public_access_block" "source" {
 # Destination bucket — processed images land here
 resource "aws_s3_bucket" "destination" {
   bucket        = var.destination_bucket_name
-  force_destroy = true
+  force_destroy = var.force_destroy_buckets
 
   tags = {
     Name        = "Image Processing Destination Bucket"
