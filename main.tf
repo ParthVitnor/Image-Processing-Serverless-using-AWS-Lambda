@@ -143,6 +143,42 @@ resource "aws_iam_role_policy_attachment" "lambda_cloudwatch" {
 }
 
 # ─────────────────────────────────────────────
+# LAMBDA PACKAGING (automated, reproducible)
+# ─────────────────────────────────────────────
+
+# Step 1 — pip install Pillow into a local build/ directory.
+# Re-runs whenever handler.py changes (tracked via triggers hash).
+resource "null_resource" "pip_install" {
+  triggers = {
+    handler_hash = filesha256("${path.module}/lambda/handler.py")
+  }
+
+  provisioner "local-exec" {
+    command = <<-EOT
+      pip install \
+        --quiet \
+        --platform manylinux2014_x86_64 \
+        --target "${path.module}/build" \
+        --implementation cp \
+        --python-version 3.11 \
+        --only-binary=:all: \
+        Pillow
+      cp "${path.module}/lambda/handler.py" "${path.module}/build/handler.py"
+    EOT
+  }
+}
+
+# Step 2 — zip the build/ directory into lambda_function.zip.
+# archive_file depends on the null_resource so it always runs after pip.
+data "archive_file" "lambda_zip" {
+  type        = "zip"
+  source_dir  = "${path.module}/build"
+  output_path = "${path.module}/lambda_function.zip"
+
+  depends_on = [null_resource.pip_install]
+}
+
+# ─────────────────────────────────────────────
 # LAMBDA FUNCTION
 # ─────────────────────────────────────────────
 
@@ -150,9 +186,9 @@ resource "aws_lambda_function" "image_processor" {
   function_name = var.lambda_function_name
   description   = "Processes uploaded images: JPEG(85), JPEG(60), WebP, PNG, Thumbnail 200x200"
 
-  # Deployment package — built from ./lambda/handler.py
-  filename         = "${path.module}/lambda_function.zip"
-  source_code_hash = filebase64sha256("${path.module}/lambda_function.zip")
+  # Deployment package — auto-built: pip install Pillow + handler.py → zip
+  filename         = data.archive_file.lambda_zip.output_path
+  source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
   handler = "handler.lambda_handler"
   runtime = var.lambda_runtime
@@ -179,6 +215,7 @@ resource "aws_lambda_function" "image_processor" {
     aws_iam_role_policy_attachment.lambda_s3,
     aws_iam_role_policy_attachment.lambda_cloudwatch,
     aws_cloudwatch_log_group.lambda,
+    null_resource.pip_install,
   ]
 
   tags = {
