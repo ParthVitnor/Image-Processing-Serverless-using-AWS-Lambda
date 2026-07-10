@@ -186,3 +186,17 @@ resource "aws_lambda_function" "image_processor" {
     Project = "image-processing-serverless"
   }
 }
+
+# ─────────────────────────────────────────────
+# CLOUDWATCH LOG GROUP
+# ─────────────────────────────────────────────
+
+resource "aws_cloudwatch_log_group" "lambda" {
+  # AWS Lambda automatically uses /aws/lambda/<function_name>
+  name              = "/aws/lambda/${var.lambda_function_name}"
+  retention_in_days = var.log_retention_days
+
+  tags = {
+    Project = "image-processing-serverless"
+  }
+}
