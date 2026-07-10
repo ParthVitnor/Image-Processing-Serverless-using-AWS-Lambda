@@ -8,12 +8,22 @@ variable "source_bucket_name" {
   description = "Name of the S3 source bucket where original images are uploaded"
   type        = string
   default     = "image-processing-source-bucket-tf"
+
+  validation {
+    condition     = length(var.source_bucket_name) > 0
+    error_message = "source_bucket_name must not be empty."
+  }
 }
 
 variable "destination_bucket_name" {
   description = "Name of the S3 destination bucket where processed images are stored"
   type        = string
   default     = "image-processing-destination-bucket-tf"
+
+  validation {
+    condition     = var.destination_bucket_name != var.source_bucket_name
+    error_message = "destination_bucket_name must differ from source_bucket_name. Using the same bucket would cause recursive Lambda invocations."
+  }
 }
 
 variable "lambda_function_name" {
