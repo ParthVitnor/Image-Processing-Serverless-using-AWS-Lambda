@@ -239,8 +239,77 @@ resource "aws_cloudwatch_log_group" "lambda" {
 }
 
 # ─────────────────────────────────────────────
-# S3 → LAMBDA TRIGGER
+# DEAD LETTER QUEUE (SQS)
 # ─────────────────────────────────────────────
+
+# SQS queue to catch failed async Lambda invocations
+resource "aws_sqs_queue" "dlq" {
+  name                      = "${var.lambda_function_name}-dlq"
+  message_retention_seconds = 1209600 # 14 days — enough time to inspect and replay
+
+  tags = {
+    Project = "image-processing-serverless"
+  }
+}
+
+# Allow Lambda service to send messages to the DLQ
+data "aws_iam_policy_document" "dlq_send" {
+  statement {
+    sid    = "AllowLambdaSendMessage"
+    effect = "Allow"
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.dlq.arn]
+    condition {
+      test     = "ArnEquals"
+      variable = "aws:SourceArn"
+      values   = [aws_lambda_function.image_processor.arn]
+    }
+  }
+}
+
+resource "aws_sqs_queue_policy" "dlq" {
+  queue_url = aws_sqs_queue.dlq.id
+  policy    = data.aws_iam_policy_document.dlq_send.json
+}
+
+# Grant the Lambda execution role permission to send to the DLQ
+data "aws_iam_policy_document" "lambda_dlq" {
+  statement {
+    sid     = "SendToDLQ"
+    effect  = "Allow"
+    actions = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.dlq.arn]
+  }
+}
+
+resource "aws_iam_policy" "lambda_dlq_policy" {
+  name        = "${var.lambda_function_name}-dlq-policy"
+  description = "Allow Lambda execution role to send failed events to SQS DLQ"
+  policy      = data.aws_iam_policy_document.lambda_dlq.json
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_dlq" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = aws_iam_policy.lambda_dlq_policy.arn
+}
+
+# Wire up async invocation settings: 2 retries then route to DLQ
+resource "aws_lambda_function_event_invoke_config" "image_processor" {
+  function_name          = aws_lambda_function.image_processor.function_name
+  maximum_retry_attempts = 2
+
+  destination_config {
+    on_failure {
+      destination = aws_sqs_queue.dlq.arn
+    }
+  }
+}
+
+
 
 # Allow S3 to invoke the Lambda function
 resource "aws_lambda_permission" "allow_s3" {
