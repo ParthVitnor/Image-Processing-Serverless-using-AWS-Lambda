@@ -1,7 +1,7 @@
 """
 Image Processing Lambda Function
 ─────────────────────────────────
-Triggered by S3 PutObject events on the source bucket.
+Triggered by S3 ObjectCreated events on the source bucket.
 For every uploaded image it produces five variants in the destination bucket:
   • JPEG at quality 85   →  <key>_q85.jpg
   • JPEG at quality 60   →  <key>_q60.jpg
@@ -16,11 +16,9 @@ Environment variables (injected by Terraform):
 
 Error handling:
   - Each S3 record is processed independently; one bad file does not abort others.
-  - PIL.UnidentifiedImageError is caught and logged; the invocation still succeeds
-    so S3 does not re-trigger and eventually route to the DLQ.
-  - All unexpected exceptions per record are caught, logged with full traceback,
-    and re-raised at the end so at least one failure makes the invocation fail
-    (which feeds the DLQ / async retry mechanism).
+  - PIL.UnidentifiedImageError → logged as warning, record skipped (no retry value).
+  - All other exceptions per record → logged with full traceback, collected, and
+    re-raised at the end so the invocation is marked failed and routes to the DLQ.
 """
 
 import io
@@ -81,6 +79,7 @@ def process_image(img: Image.Image, base: str) -> None:
     _upload(buf, f"{base}.webp", "image/webp")
 
     # ── PNG ──────────────────────────────────────────────────────────────────
+    # Keep RGBA so transparent source images are preserved in the PNG output.
     buf = io.BytesIO()
     img.convert("RGBA").save(buf, format="PNG", optimize=True)
     _upload(buf, f"{base}.png", "image/png")
@@ -89,6 +88,7 @@ def process_image(img: Image.Image, base: str) -> None:
     thumb = img.copy()
     thumb.thumbnail((THUMBNAIL_WIDTH, THUMBNAIL_HEIGHT), Image.LANCZOS)
     buf = io.BytesIO()
+    # Convert to RGB for JPEG output (JPEG does not support alpha channel)
     thumb.convert("RGB").save(buf, format="JPEG", quality=85)
     _upload(buf, f"{base}_thumb_{THUMBNAIL_WIDTH}x{THUMBNAIL_HEIGHT}.jpg", "image/jpeg")
 
@@ -100,10 +100,11 @@ def lambda_handler(event, context):
     Process each S3 record independently.
 
     Strategy:
-    - UnidentifiedImageError  → log a warning and skip (not re-routable to DLQ,
-      the upload was simply not an image — no point retrying).
-    - Any other exception      → log with traceback, collect, and re-raise a
-      summary at the end so the invocation is marked failed and the DLQ fires.
+    - UnidentifiedImageError  → warn + skip (the file is not an image;
+      retrying won't fix it, so we do not fail the invocation).
+    - Any other exception      → log full traceback, collect the key, and
+      re-raise a summary RuntimeError after all records are attempted so the
+      invocation fails and the async retry / DLQ mechanism fires.
     """
     failed_keys: list[str] = []
 
@@ -117,26 +118,24 @@ def lambda_handler(event, context):
             response   = s3.get_object(Bucket=bucket, Key=key)
             image_data = response["Body"].read()
 
-            try:
-                img = Image.open(io.BytesIO(image_data))
-                # Fully load pixel data now so decode errors surface here,
-                # not inside process_image midway through writing outputs.
-                img.load()
-            except UnidentifiedImageError:
-                # The file has a matching extension but is not a valid image
-                # (e.g. a text file renamed to .jpg).  Log and skip — retrying
-                # won't help, so we do NOT add it to failed_keys.
-                logger.warning(
-                    "Skipping s3://%s/%s — not a recognised image format",
-                    bucket, key,
-                )
-                continue
+            # Open and fully decode the image upfront so any corrupt-file or
+            # format errors are caught here, in one place, before we start
+            # writing any output variants.
+            img = Image.open(io.BytesIO(image_data))
+            img.load()  # forces full pixel decode; raises on corrupt data
 
             process_image(img, _base_key(key))
 
+        except UnidentifiedImageError:
+            # File extension matched but content is not a recognisable image.
+            # No point retrying — skip and move on.
+            logger.warning(
+                "Skipping s3://%s/%s — not a recognised image format",
+                bucket, key,
+            )
+
         except Exception:  # noqa: BLE001
-            # Catch everything else (S3 errors, OOM, unexpected PIL bugs, …)
-            # Log full traceback for CloudWatch, then collect for re-raise.
+            # S3 errors, OOM, unexpected PIL failures, etc.
             logger.error(
                 "Failed to process s3://%s/%s:\n%s",
                 bucket, key, traceback.format_exc(),
