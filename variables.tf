@@ -68,6 +68,12 @@ variable "thumbnail_height" {
   default     = 200
 }
 
+variable "lambda_reserved_concurrency" {
+  description = "Reserved concurrent executions for the Lambda function. -1 means unreserved. Set a low value (e.g. 10) to cap blast radius."
+  type        = number
+  default     = 10
+}
+
 variable "force_destroy_buckets" {
   description = "Allow Terraform to destroy S3 buckets even when they contain objects. Set to true only in non-production environments."
   type        = bool

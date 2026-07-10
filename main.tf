@@ -143,39 +143,28 @@ resource "aws_iam_role_policy_attachment" "lambda_cloudwatch" {
 }
 
 # ─────────────────────────────────────────────
-# LAMBDA PACKAGING (automated, reproducible)
+# LAMBDA PACKAGING
 # ─────────────────────────────────────────────
+# The deployment zip contains only handler.py — Pillow is supplied via a
+# Lambda Layer (see layers = [...] on aws_lambda_function.image_processor).
+# This avoids the archive_file / null_resource timing problem where
+# archive_file evaluates at plan time but null_resource pip install runs
+# at apply time, causing "source_dir does not exist" on first apply.
 
-# Step 1 — pip install Pillow into a local build/ directory.
-# Re-runs whenever handler.py changes (tracked via triggers hash).
-resource "null_resource" "pip_install" {
-  triggers = {
-    handler_hash = filesha256("${path.module}/lambda/handler.py")
-  }
-
-  provisioner "local-exec" {
-    command = <<-EOT
-      pip install \
-        --quiet \
-        --platform manylinux2014_x86_64 \
-        --target "${path.module}/build" \
-        --implementation cp \
-        --python-version 3.11 \
-        --only-binary=:all: \
-        Pillow
-      cp "${path.module}/lambda/handler.py" "${path.module}/build/handler.py"
-    EOT
-  }
-}
-
-# Step 2 — zip the build/ directory into lambda_function.zip.
-# archive_file depends on the null_resource so it always runs after pip.
 data "archive_file" "lambda_zip" {
   type        = "zip"
-  source_dir  = "${path.module}/build"
+  source_file = "${path.module}/lambda/handler.py"
   output_path = "${path.module}/lambda_function.zip"
+}
 
-  depends_on = [null_resource.pip_install]
+# ─────────────────────────────────────────────
+# PILLOW LAMBDA LAYER
+# ─────────────────────────────────────────────
+# Public Klayers ARN for Pillow on Python 3.11 in us-east-1.
+# Source: https://github.com/keithrozario/Klayers
+# To update: check the latest ARN for your region at the Klayers repo.
+locals {
+  pillow_layer_arn = "arn:aws:lambda:${var.aws_region}:770693421928:layer:Klayers-p311-Pillow:4"
 }
 
 # ─────────────────────────────────────────────
@@ -186,16 +175,21 @@ resource "aws_lambda_function" "image_processor" {
   function_name = var.lambda_function_name
   description   = "Processes uploaded images: JPEG(85), JPEG(60), WebP, PNG, Thumbnail 200x200"
 
-  # Deployment package — auto-built: pip install Pillow + handler.py → zip
   filename         = data.archive_file.lambda_zip.output_path
   source_code_hash = data.archive_file.lambda_zip.output_base64sha256
 
   handler = "handler.lambda_handler"
   runtime = var.lambda_runtime
 
+  # Pillow is provided via the public Klayers layer — no need to bundle it
+  layers = [local.pillow_layer_arn]
+
   role        = aws_iam_role.lambda_exec.arn
   timeout     = var.lambda_timeout
   memory_size = var.lambda_memory_size
+
+  # Limit concurrency to prevent runaway invocations (e.g. recursive trigger)
+  reserved_concurrent_executions = var.lambda_reserved_concurrency
 
   environment {
     variables = {
@@ -215,7 +209,6 @@ resource "aws_lambda_function" "image_processor" {
     aws_iam_role_policy_attachment.lambda_s3,
     aws_iam_role_policy_attachment.lambda_cloudwatch,
     aws_cloudwatch_log_group.lambda,
-    null_resource.pip_install,
   ]
 
   tags = {
