@@ -37,3 +37,13 @@ output "cloudwatch_log_group_name" {
   description = "CloudWatch log group name for Lambda logs"
   value       = aws_cloudwatch_log_group.lambda.name
 }
+
+output "dlq_url" {
+  description = "URL of the SQS Dead Letter Queue for failed Lambda invocations"
+  value       = aws_sqs_queue.dlq.id
+}
+
+output "dlq_arn" {
+  description = "ARN of the SQS Dead Letter Queue"
+  value       = aws_sqs_queue.dlq.arn
+}
