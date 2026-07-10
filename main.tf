@@ -200,3 +200,48 @@ resource "aws_cloudwatch_log_group" "lambda" {
     Project = "image-processing-serverless"
   }
 }
+
+# ─────────────────────────────────────────────
+# S3 → LAMBDA TRIGGER
+# ─────────────────────────────────────────────
+
+# Allow S3 to invoke the Lambda function
+resource "aws_lambda_permission" "allow_s3" {
+  statement_id  = "AllowS3Invoke"
+  action        = "lambda:InvokeFunction"
+  function_name = aws_lambda_function.image_processor.function_name
+  principal     = "s3.amazonaws.com"
+  source_arn    = aws_s3_bucket.source.arn
+}
+
+# S3 bucket notification — fires Lambda on every object upload (PutObject)
+resource "aws_s3_bucket_notification" "source_trigger" {
+  bucket = aws_s3_bucket.source.id
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.image_processor.arn
+    events              = ["s3:ObjectCreated:Put"]
+    # Trigger only for common image formats
+    filter_suffix       = ".jpg"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.image_processor.arn
+    events              = ["s3:ObjectCreated:Put"]
+    filter_suffix       = ".jpeg"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.image_processor.arn
+    events              = ["s3:ObjectCreated:Put"]
+    filter_suffix       = ".png"
+  }
+
+  lambda_function {
+    lambda_function_arn = aws_lambda_function.image_processor.arn
+    events              = ["s3:ObjectCreated:Put"]
+    filter_suffix       = ".webp"
+  }
+
+  depends_on = [aws_lambda_permission.allow_s3]
+}
