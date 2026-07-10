@@ -40,6 +40,24 @@ resource "aws_s3_bucket_public_access_block" "source" {
   restrict_public_buckets = true
 }
 
+# Lifecycle — expire original uploads after 90 days to control storage costs
+resource "aws_s3_bucket_lifecycle_configuration" "source" {
+  bucket = aws_s3_bucket.source.id
+
+  rule {
+    id     = "expire-source-objects"
+    status = "Enabled"
+
+    expiration {
+      days = 90
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
+}
+
 # Destination bucket — processed images land here
 resource "aws_s3_bucket" "destination" {
   bucket        = var.destination_bucket_name
@@ -76,6 +94,30 @@ resource "aws_s3_bucket_public_access_block" "destination" {
   block_public_policy     = true
   ignore_public_acls      = true
   restrict_public_buckets = true
+}
+
+# Lifecycle — transition processed images to IA after 30 days,
+# expire after 365 days to control long-term storage costs
+resource "aws_s3_bucket_lifecycle_configuration" "destination" {
+  bucket = aws_s3_bucket.destination.id
+
+  rule {
+    id     = "transition-and-expire-processed-objects"
+    status = "Enabled"
+
+    transition {
+      days          = 30
+      storage_class = "STANDARD_IA"
+    }
+
+    expiration {
+      days = 365
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 30
+    }
+  }
 }
 
 # ─────────────────────────────────────────────
