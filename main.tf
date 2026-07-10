@@ -77,3 +77,67 @@ resource "aws_s3_bucket_public_access_block" "destination" {
   ignore_public_acls      = true
   restrict_public_buckets = true
 }
+
+# ─────────────────────────────────────────────
+# IAM ROLE & POLICIES FOR LAMBDA
+# ─────────────────────────────────────────────
+
+# Trust policy — allows Lambda service to assume this role
+data "aws_iam_policy_document" "lambda_assume_role" {
+  statement {
+    effect  = "Allow"
+    actions = ["sts:AssumeRole"]
+
+    principals {
+      type        = "Service"
+      identifiers = ["lambda.amazonaws.com"]
+    }
+  }
+}
+
+resource "aws_iam_role" "lambda_exec" {
+  name               = "${var.lambda_function_name}-exec-role"
+  assume_role_policy = data.aws_iam_policy_document.lambda_assume_role.json
+
+  tags = {
+    Project = "image-processing-serverless"
+  }
+}
+
+# Policy — S3 GetObject on source, PutObject on destination
+data "aws_iam_policy_document" "lambda_s3" {
+  statement {
+    sid     = "ReadSourceBucket"
+    effect  = "Allow"
+    actions = ["s3:GetObject"]
+    resources = [
+      "${aws_s3_bucket.source.arn}/*"
+    ]
+  }
+
+  statement {
+    sid     = "WriteDestinationBucket"
+    effect  = "Allow"
+    actions = ["s3:PutObject"]
+    resources = [
+      "${aws_s3_bucket.destination.arn}/*"
+    ]
+  }
+}
+
+resource "aws_iam_policy" "lambda_s3_policy" {
+  name        = "${var.lambda_function_name}-s3-policy"
+  description = "Allow Lambda to read from source S3 bucket and write to destination S3 bucket"
+  policy      = data.aws_iam_policy_document.lambda_s3.json
+}
+
+resource "aws_iam_role_policy_attachment" "lambda_s3" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = aws_iam_policy.lambda_s3_policy.arn
+}
+
+# Attach AWS managed policy for CloudWatch Logs (Lambda basic execution)
+resource "aws_iam_role_policy_attachment" "lambda_cloudwatch" {
+  role       = aws_iam_role.lambda_exec.name
+  policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
+}
