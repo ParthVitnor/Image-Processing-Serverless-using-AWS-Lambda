@@ -141,3 +141,48 @@ resource "aws_iam_role_policy_attachment" "lambda_cloudwatch" {
   role       = aws_iam_role.lambda_exec.name
   policy_arn = "arn:aws:iam::aws:policy/service-role/AWSLambdaBasicExecutionRole"
 }
+
+# ─────────────────────────────────────────────
+# LAMBDA FUNCTION
+# ─────────────────────────────────────────────
+
+resource "aws_lambda_function" "image_processor" {
+  function_name = var.lambda_function_name
+  description   = "Processes uploaded images: JPEG(85), JPEG(60), WebP, PNG, Thumbnail 200x200"
+
+  # Deployment package — built from ./lambda/handler.py
+  filename         = "${path.module}/lambda_function.zip"
+  source_code_hash = filebase64sha256("${path.module}/lambda_function.zip")
+
+  handler = "handler.lambda_handler"
+  runtime = var.lambda_runtime
+
+  role        = aws_iam_role.lambda_exec.arn
+  timeout     = var.lambda_timeout
+  memory_size = var.lambda_memory_size
+
+  environment {
+    variables = {
+      DESTINATION_BUCKET = aws_s3_bucket.destination.id
+      THUMBNAIL_WIDTH    = tostring(var.thumbnail_width)
+      THUMBNAIL_HEIGHT   = tostring(var.thumbnail_height)
+    }
+  }
+
+  # Structured logging via CloudWatch
+  logging_config {
+    log_format = "JSON"
+    log_group  = aws_cloudwatch_log_group.lambda.name
+  }
+
+  depends_on = [
+    aws_iam_role_policy_attachment.lambda_s3,
+    aws_iam_role_policy_attachment.lambda_cloudwatch,
+    aws_cloudwatch_log_group.lambda,
+  ]
+
+  tags = {
+    Name    = var.lambda_function_name
+    Project = "image-processing-serverless"
+  }
+}
