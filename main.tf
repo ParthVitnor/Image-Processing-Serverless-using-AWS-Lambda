@@ -191,6 +191,11 @@ resource "aws_lambda_function" "image_processor" {
   # Limit concurrency to prevent runaway invocations (e.g. recursive trigger)
   reserved_concurrent_executions = var.lambda_reserved_concurrency
 
+  # Route failed async invocations to the SQS DLQ
+  dead_letter_config {
+    target_arn = aws_sqs_queue.dlq.arn
+  }
+
   environment {
     variables = {
       DESTINATION_BUCKET = aws_s3_bucket.destination.id
@@ -208,6 +213,7 @@ resource "aws_lambda_function" "image_processor" {
   depends_on = [
     aws_iam_role_policy_attachment.lambda_s3,
     aws_iam_role_policy_attachment.lambda_cloudwatch,
+    aws_iam_role_policy_attachment.lambda_dlq,
     aws_cloudwatch_log_group.lambda,
   ]
 
